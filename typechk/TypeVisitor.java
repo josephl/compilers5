@@ -21,10 +21,11 @@ public class TypeVisitor implements TypeVI{
         this.symTable = symtab;
         this.currClass = null;
         this.currMethod = null;
-        
+
         this.IntType = new BasicType(BasicType.Int);
         this.BoolType = new BasicType(BasicType.Bool);
-        this.debug = true;
+
+        this.debug = false; ///// Set to true to trace
     }
 
     // top level visit routine
@@ -76,8 +77,8 @@ public class TypeVisitor implements TypeVI{
         for (int i = 0; i < n.size(); i++)
             n.elementAt(i).accept(this);
         if (this.currMethod.rtype() != null && !this.hasReturn) {
-            throw new TypeException("Method " + this.currMethod.id() +
-                " is missing a Return statement");
+            throw new TypeException("Method " + this.currMethod.id().s +
+                " is missing a Return statment");
         }
         if (this.debug)
             System.out.println("END: StmtList");
@@ -146,6 +147,7 @@ public class TypeVisitor implements TypeVI{
         if (this.debug)
             System.out.println("DEBUG: Block");
     }
+
     public void visit(Assign n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: Assign");
@@ -157,27 +159,30 @@ public class TypeVisitor implements TypeVI{
             System.out.println("DEBUG: Id LHS " + t1.toString());
             System.out.println("DEBUG: Id RHS " + t2.toString());
         }
-        //else {
-        //    // method scope
-        //    t1 = 
 
         // check for type compatibility of both sides
         if (!this.compatible(t1, t2)) {
-            throw new TypeException("Incompatible types.");
+            throw new TypeException("Incompatible types in Assign: " +
+                t1.toString() + " <- " + t2.toString());
         }
     }
+
     public void visit(CallStmt n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: CallStmt");
         // check if method id is valid
-        MethodRec mr;
-        mr = this.symTable.getMethod(this.currClass, n.mid);
-        System.out.println("CallStmt: " + mr.id().s);
 
-        n.obj.accept(this);
-        n.mid.accept(this);
-        n.args.accept(this);
+        Type objType = n.obj.accept(this);
         // check if method's formals match callstmt's actual args
+        Id classid = new Id(objType.toString());
+        if(this.debug)
+            System.out.println("ID: " + objType.toString());
+        ClassRec objRec = this.symTable.getClass(classid);
+
+        MethodRec mr = this.symTable.getMethod(objRec, n.mid);
+        if (this.debug)
+            System.out.println("CallStmt: " + mr.id().s);
+
         if (n.args.size() != mr.paramCnt()) {
             throw new TypeException("Wrong param count");
         }
@@ -195,12 +200,22 @@ public class TypeVisitor implements TypeVI{
             System.out.println("END: CallStmt");
     }
     public void visit(If n) throws Exception {
+        if (this.debug)
+            System.out.println("DEBUG: If");
         Type t1 = n.e.accept(this);
-        Type t2 = new BasicType(BasicType.Bool);
-        if (!this.compatible(t1, t2)) {
+        if (!this.compatible(t1, this.BoolType)) {
             throw new TypeException("Test of If is not of boolean type: " +
                 t1.toString());
         }
+        // compensate for 'if' only having a return stmt
+        boolean wasReturn = this.hasReturn;
+        n.s1.accept(this);
+        this.hasReturn = wasReturn;
+        // check if else has return
+        if (n.s2 != null)
+            n.s2.accept(this);
+        if (this.debug)
+            System.out.println("END: If");
     }
     public void visit(While n) throws Exception {
         if (this.debug)
@@ -209,17 +224,18 @@ public class TypeVisitor implements TypeVI{
     public void visit(Print n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: Print");
-        Type t = n.e.accept(this);
-        if (!this.compatible(t, this.IntType) &&
-            !this.compatible(t, this.BoolType)) {
-            throw new TypeException("Argument to Print must be of a " +
-                "basic type or a string literal: " + t.toString());
+        if (n.e != null) {
+            Type t = n.e.accept(this);
+            if (!this.compatible(t, this.IntType) &&
+                !this.compatible(t, this.BoolType)) {
+                throw new TypeException("Argument to Print must be of a " +
+                    "basic type or a string literal: " + t.toString());
+            }
         }
     }
     public void visit(Return n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: Return");
-            System.out.println("Null return");
 
         this.hasReturn = true;
         Type t1 = null;
@@ -245,9 +261,7 @@ public class TypeVisitor implements TypeVI{
             System.out.println("DEBUG: Binop");
         Type t1 = n.e1.accept(this);
         Type t2 = n.e2.accept(this);
-
         Type returnType;
-
         switch (n.op) {
             case 0:
             case 1:
@@ -289,37 +303,47 @@ public class TypeVisitor implements TypeVI{
             throw new TypeException("Incorrect operand types in Relop: " +
                 t1.toString() + n.opName(n.op) + t2.toString());
         }
-        return t1;
+        return this.BoolType;
     }
     public Type visit(Unop n) throws Exception {
         if (this.debug)
-
             System.out.println("DEBUG: Unop");
-        return n.accept(this);
+        Type t = n.e.accept(this);
+        switch (n.op) {
+            case 0:
+                if (!this.compatible(t, this.IntType)) {
+                    throw new TypeException("Negation of non int val");
+                }
+                break;
+            case 1:
+                if (!this.compatible(t, this.BoolType)) {
+                    throw new TypeException("NOT op of non bool val");
+                }
+                break;
+            default:
+                    throw new TypeException("? operation");
+        }
+        return t;
     }
     public Type visit(ArrayElm n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: ArrayElm");
-
         Type ta = n.array.accept(this);
-        System.out.println("Accept array Id: " + ta.toString());
-        Type ti = n.idx.accept(this);
-        System.out.println("Accept array index");
-
-        String ts = ta.toString();
-        if (!ts.endsWith("[]")) {
-            throw new TypeException("ArrayElm object is not an array: " + ts);
+        if (!ta.toString().endsWith("[]")) {
+            throw new TypeException("ArrayElm object is not an array: " +
+                ta.toString());
         }
-        // check if valid array
-        //VarRec vr = this.symTable.getVar(this.currClass, this.currMethod,
-        //    n.array);
 
-        return null;
+        Type ti = n.idx.accept(this);
+        if (!this.compatible(ti, this.IntType)) {
+            throw new TypeException("ArrayElm must be int: " + ti.toString());
+        }
+        return ti;
     }
     public Type visit(ArrayLen n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: ArrayLen");
-        return n.accept(this);
+        return this.IntType;
     }
     public Type visit(Field n) throws Exception {
         if (this.debug)
@@ -340,6 +364,7 @@ public class TypeVisitor implements TypeVI{
                 objid.s);
         }
         ClassRec c = this.symTable.getClass(objid);
+        /*
         ObjType objType = new ObjType(objid);
 
         // check field
@@ -350,17 +375,31 @@ public class TypeVisitor implements TypeVI{
         if (!this.compatible(tobj, objType)) {
             throw new TypeException("not an object");
         }
+        */
 
-        VarRec vr = c.getClassVar(n.var);
-        return vr.type();
+        VarRec vr = null;
+        do {
+            vr = c.getClassVar(n.var);
+            c = c.parent();
+        } while (vr == null && c != null);
+
+        if (vr != null) {
+            return vr.type();
+        }
+        else {
+            throw new Exception("Object has no field: " + tobj.toString()
+                + ": " + n.var.s);
+        }
     }
     public Type visit(Call n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: Call");
-        n.obj.accept(this);
-        n.mid.accept(this);
-        n.args.accept(this);
-        MethodRec mr = this.symTable.getMethod(this.currClass, n.mid);
+        Type objType = n.obj.accept(this);
+        Id classid = new Id(objType.toString());
+        ClassRec objRec = this.symTable.getClass(classid);
+        //n.mid.accept(this);
+        //n.args.accept(this);
+        MethodRec mr = this.symTable.getMethod(objRec, n.mid);
         // check if method's formals match callstmt's actual args
         if (n.args.size() != mr.paramCnt()) {
             throw new TypeException(
@@ -383,7 +422,16 @@ public class TypeVisitor implements TypeVI{
     public Type visit(NewArray n) throws Exception {
         if (this.debug)
             System.out.println("DEBUG: NewArray");
-        return null;
+        if (n.size < 0) {
+            throw new TypeException("Negative array size");
+        }
+        ClassRec cr = null;
+        Id classid = new Id(n.et.toString());
+        if (n.et.toString() != "int" &&
+            n.et.toString() != "boolean") {
+            cr = this.symTable.getClass(classid);
+        }
+        return new ArrayType(n.et);
     }
     public Type visit(NewObj n) throws Exception {
         if (this.debug)
@@ -463,20 +511,23 @@ public class TypeVisitor implements TypeVI{
             System.out.println(ts1 + "::" + ts2);
         
         if (ts1.equals(ts2)) {
-            // check for basic type match and same objtype
-            //if (ts1.endsWith("[]") && ts2.endsWith("[]")) {
-            //    // arrays, compare with first element of t1
-            //    for (;;) {
-            //    }
-            //}
             if (this.debug)
                 System.out.println("compatibility: equal");
             return true;
         }
         else {
+            if (this.debug)
+                System.out.println("compatibility: 2 " + ts2);
             // make sure not basic types
-            if (ts1 == "int" || ts1 == "float" || ts1 == "boolean" ||
-                ts2 == "int" || ts2 == "float" || ts2 == "boolean") {
+            if (ts1.equals("int") || ts1.equals("float") || ts1.equals("boolean") ||
+                ts2.equals("int") || ts2.equals("float") || ts2.equals("boolean")) {
+                if (this.debug)
+                    System.out.println("Unequal");
+                return false;
+            }
+            // make sure not arrays of basic types
+            if (ts1.equals("int[]") || ts1.equals("float[]") || ts1.equals("boolean[]") ||
+                ts2.equals("int[]") || ts2.equals("float[]") || ts2.equals("boolean[]")) {
                 if (this.debug)
                     System.out.println("Unequal");
                 return false;
@@ -491,7 +542,7 @@ public class TypeVisitor implements TypeVI{
                     return true;
                 }
                 ido = new Id(t2.toString());
-                ancestor = symTable.getClass(ido).parent();
+                ancestor = ancestor.parent();
             }
         }
         // incompatible
